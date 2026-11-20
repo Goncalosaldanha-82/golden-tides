@@ -1,11 +1,12 @@
 name: Golden Tides daily
 
-# Makes the day's song and uploads it scheduled for 06:00 Lisbon time the next morning (YouTube publishAt).
+# Runs right after the free Hugging Face GPU quota renews (~09:00 UTC): makes the next song and uploads it
+# scheduled for 06:00 Lisbon the next morning (or publishes at once if today has no release yet).
 # The second trigger is a backup if GitHub delays/skips the first; the script never releases twice a day.
 on:
   schedule:
+    - cron: "30 9 * * *"
     - cron: "0 13 * * *"
-    - cron: "0 15 * * *"
   workflow_dispatch: {}
 
 permissions:

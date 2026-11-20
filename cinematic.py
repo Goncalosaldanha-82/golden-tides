@@ -142,6 +142,14 @@ def render(image, wav, out, W, H, title, subtitle, start=0.0, dur=None, focus_x=
     return out
 
 
+def as_png(img, dst):
+    """cairo reads PNG only."""
+    if img.suffix.lower() == ".png":
+        return img
+    subprocess.run([FF, "-y", "-loglevel", "error", "-i", str(img), str(dst)], check=True)
+    return dst
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--audio", required=True)
@@ -152,21 +160,20 @@ def main():
     ap.add_argument("--focus-x", type=float, default=0.5, help="horizontal subject position (0..1) for the vertical Short crop")
     ap.add_argument("--short-only", action="store_true")
     ap.add_argument("--title-y", type=float, help="title height as a fraction of the frame (default: top)")
+    ap.add_argument("--short-image", help="separate 9:16 image for the Short (no crop of the main image)")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     wav = out / "audio.wav"
     to_wav(a.audio, wav)
     img = Path(a.image)
-    if img.suffix.lower() != ".png":                                  # cairo reads PNG
-        png = out / "cover_src.png"
-        subprocess.run([FF, "-y", "-loglevel", "error", "-i", str(img), str(png)], check=True)
-        img = png
+    img = as_png(img, out / "cover_src.png")
+    simg = as_png(Path(a.short_image), out / "short_src.png") if a.short_image else img
     if not a.short_only:
         render(img, wav, out / "video.mp4", 1920, 1080, a.title, a.subtitle, title_y=a.title_y)
     mono, sr = load_mono(wav)
     s0 = loudest_window(mono, sr, 30)
-    render(img, wav, out / "short.mp4", 1080, 1920, a.title, a.subtitle, start=s0, dur=min(30.0, len(mono) / sr - s0), focus_x=a.focus_x, title_y=a.title_y)
+    render(simg, wav, out / "short.mp4", 1080, 1920, a.title, a.subtitle, start=s0, dur=min(30.0, len(mono) / sr - s0), focus_x=a.focus_x, title_y=a.title_y)
     print("ready:", out / "video.mp4", out / "short.mp4", f"(short from {s0:.0f}s)")
 
 

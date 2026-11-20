@@ -43,8 +43,20 @@ FALLBACK_STYLE = {
     "Afro Latin": "Afro-Latin pop, 104 BPM, afrobeats and reggaeton groove, nylon guitar, warm bass, sensual female vocal",
     "Emotional Dance": "Emotional melodic dance, 124 BPM, euphoric piano, driving kick, warm lead vocal, anthemic",
 }
-FALLBACK_COVER = ("Cinematic photo, {concept}, golden sunset over the ocean, warm light, subject in upper half, "
-                  "calm lower third, film grain, ultra realistic, no text")
+FALLBACK_COVER = "Cinematic photo of a beautiful woman, {concept}, golden sunset over the ocean, warm light"
+# Channel look (user feedback): natural photo, the woman FULL BODY and never cropped, sensual; title goes over the sky.
+COVER_STYLE = ("{base}. Wide full-body shot: the whole person visible head to toe with a little space below the feet, "
+               "never cropped, standing in the lower part of the frame with lots of open sunset sky above. "
+               "Natural candid photography, realistic skin and natural proportions, elegant and sensual, "
+               "shot on 35mm film, soft golden light, sharp focus, no text, no watermark")
+
+
+def cover_prompt(base):
+    base = re.sub(r",?\s*subject in upper half,[^,]*in lower third", "", base)
+    base = re.sub(r",?\s*(no text|film grain|ultra realistic|35mm film look)", "", base).rstrip(" ,.")
+    if "no people" in base:                            # landscape covers: no person to frame
+        return base + ". Natural cinematic photography, wide shot with open sky above, sharp focus, no text, no watermark"
+    return COVER_STYLE.format(base=base)
 
 
 def hf():
@@ -101,9 +113,9 @@ def make_music(song, dst):
     raise SystemExit("music generation failed 3 times (HF quota or Space down) — nothing published, retry next run")
 
 
-def make_cover(prompt, dst):
+def make_cover(prompt, dst, width=1344, height=768):
     c = Client("black-forest-labs/FLUX.1-schnell", token=hf(), verbose=False)
-    r = c.predict(prompt=prompt, seed=7, randomize_seed=False, width=1344, height=768,
+    r = c.predict(prompt=cover_prompt(prompt), seed=7, randomize_seed=False, width=width, height=height,
                   num_inference_steps=4, api_name="/infer")
     subprocess.run([FF, "-y", "-loglevel", "error", "-i", r[0] if isinstance(r, (list, tuple)) else r, str(dst)],
                    check=True)
@@ -122,11 +134,13 @@ def main():
     a = ap.parse_args()
     now = datetime.datetime.now(datetime.timezone.utc)
     slot = now.astimezone(LISBON).replace(hour=HOUR, minute=0, second=0, microsecond=0)
-    if now.astimezone(LISBON).hour >= HOUR - 1:        # after 05:00 the run prepares tomorrow's 06:00 release
-        slot += datetime.timedelta(days=1)
-    day = slot.date().isoformat()
     pub = json.loads(PUBLISHED.read_text(encoding="utf-8")) if PUBLISHED.exists() else {}
-    if any(d.get("publish_date") == day for d in pub.values()):
+    days = {d.get("publish_date") for d in pub.values()}
+    if now.astimezone(LISBON).hour >= HOUR - 1 and slot.date().isoformat() in days:
+        slot += datetime.timedelta(days=1)            # today is covered: prepare tomorrow's 06:00 release
+    # (if today has no release yet — e.g. a missed day — it is published right away to fill the gap)
+    day = slot.date().isoformat()
+    if day in days:
         print(f"nothing to do: a Golden Tides release is already set for {day}")
         return
     yt, me = service(interactive=False)
@@ -139,11 +153,16 @@ def main():
 
     folder = ROOT / "output" / f"gt_{day}_{slugify(song['title'])}"
     folder.mkdir(parents=True, exist_ok=True)
-    make_music(song, folder / "song.mp3")
+    if song.get("audio"):                              # song already made (e.g. by hand), stored in the repo
+        shutil.copy(ROOT / song["audio"], folder / "song.mp3")
+    else:
+        make_music(song, folder / "song.mp3")
     make_cover(song["cover"], folder / "cover.png")
+    make_cover(song["cover"], folder / "cover_short.png", width=768, height=1344)
     subprocess.run([sys.executable, str(ROOT / "cinematic.py"), "--audio", str(folder / "song.mp3"),
                     "--image", str(folder / "cover.png"), "--title", song["title"].upper(),
-                    "--subtitle", song["genre"].upper(), "--out", str(folder), "--title-y", "0.86"], check=True)
+                    "--subtitle", song["genre"].upper(), "--out", str(folder),
+                    "--short-image", str(folder / "cover_short.png")], check=True)
     digest = sha256(folder / "audio.wav")
     for d in pub.values():
         if d.get("audio_sha256") == digest:
@@ -154,15 +173,16 @@ def main():
         status.update(privacyStatus="private",
                       publishAt=slot.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
     extra = {k: song[k] for k in ("blurb", "hashtags") if song.get(k)}
+    music = song.get("music_credit") or MUSIC_CREDIT
     rec = {"title": song["title"], "genre": song["genre"], "publish_date": day,
            "publishAt": status.get("publishAt") or "immediately", "audio_sha256": digest,
            "uploaded": now.isoformat()}
-    vid = upload(yt, folder / "video.mp4", pa.meta(song["title"], song["genre"], MUSIC_CREDIT, COVER_CREDIT, **extra),
+    vid = upload(yt, folder / "video.mp4", pa.meta(song["title"], song["genre"], music, COVER_CREDIT, **extra),
                  status)
     rec.update(video_id=vid, url=f"https://youtu.be/{vid}")
     pub[day] = rec
     PUBLISHED.write_text(json.dumps(pub, indent=2, ensure_ascii=False), encoding="utf-8")   # saved before the Short
-    sid = upload(yt, folder / "short.mp4", pa.short_meta(song["title"], rec["url"], song["genre"], MUSIC_CREDIT),
+    sid = upload(yt, folder / "short.mp4", pa.short_meta(song["title"], rec["url"], song["genre"], music),
                  status)
     rec.update(short_id=sid, short_url=f"https://youtube.com/shorts/{sid}")
     PUBLISHED.write_text(json.dumps(pub, indent=2, ensure_ascii=False), encoding="utf-8")
