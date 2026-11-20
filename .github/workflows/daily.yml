@@ -1,6 +1,6 @@
 name: Golden Tides daily
 
-# Makes the day's song and uploads it scheduled for 18:00 Lisbon time (YouTube publishAt).
+# Makes the day's song and uploads it scheduled for 06:00 Lisbon time the next morning (YouTube publishAt).
 # The second trigger is a backup if GitHub delays/skips the first; the script never releases twice a day.
 on:
   schedule:

@@ -1,8 +1,11 @@
-"""Golden Tides daily release for GitHub Actions (free): one new song per day, public at 18:00 Lisbon time.
+"""Golden Tides daily release for GitHub Actions (free): one new song per day, public at 06:00 Lisbon time.
+
+The song is made in the afternoon (when the free Hugging Face GPU quota is available) and uploaded
+scheduled for the NEXT 06:00 Lisbon, so YouTube publishes it at exactly 06:00.
 
 Steps: next song from songs_bank.json (original lyrics) -> music with YuE (open model, HF free GPU quota)
 -> cover with FLUX.1-schnell -> cinematic video + Short (cinematic.py) -> upload both to Golden Tides,
-private with publishAt = 18:00 Europe/Lisbon (published immediately if the run is late).
+private with publishAt = next 06:00 Europe/Lisbon (published immediately if the run is late).
 
 State lives in the repository (committed by the workflow): gt_published.json.
 Guards: one release per Lisbon day; a song title is never used twice; same audio hash never re-uploaded.
@@ -31,7 +34,7 @@ ROOT = Path(__file__).resolve().parent
 BANK = ROOT / "songs_bank.json"
 PUBLISHED = ROOT / "gt_published.json"
 LISBON = ZoneInfo("Europe/Lisbon")
-HOUR = 18
+HOUR = 6
 FF = imageio_ffmpeg.get_ffmpeg_exe()
 MUSIC_CREDIT = "Music generated with YuE (open-source AI model) on Hugging Face."
 COVER_CREDIT = "Cover image generated with FLUX.1-schnell (Apache-2.0)."
@@ -119,7 +122,7 @@ def main():
     a = ap.parse_args()
     now = datetime.datetime.now(datetime.timezone.utc)
     slot = now.astimezone(LISBON).replace(hour=HOUR, minute=0, second=0, microsecond=0)
-    if now.astimezone(LISBON).hour >= HOUR + 2:        # an evening run prepares tomorrow's release
+    if now.astimezone(LISBON).hour >= HOUR - 1:        # after 05:00 the run prepares tomorrow's 06:00 release
         slot += datetime.timedelta(days=1)
     day = slot.date().isoformat()
     pub = json.loads(PUBLISHED.read_text(encoding="utf-8")) if PUBLISHED.exists() else {}
@@ -130,7 +133,7 @@ def main():
     if me["id"] != config()["channel_id"]:
         raise SystemExit(f"STOP: token is for {me['snippet']['title']}, not Golden Tides — nothing uploaded")
     song = next_song(pub)
-    print(f"today's song: {song['title']} ({song['genre']}) -> public {day} {HOUR}:00 Lisbon")
+    print(f"today's song: {song['title']} ({song['genre']}) -> public {day} {HOUR:02d}:00 Lisbon")
     if a.dry_run:
         return
 
