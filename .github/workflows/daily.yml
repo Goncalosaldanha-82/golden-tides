@@ -1,0 +1,54 @@
+name: Golden Tides daily
+
+# Makes the day's song and uploads it scheduled for 18:00 Lisbon time (YouTube publishAt).
+# The second trigger is a backup if GitHub delays/skips the first; the script never releases twice a day.
+on:
+  schedule:
+    - cron: "0 13 * * *"
+    - cron: "0 15 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: golden-tides-daily
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: System libraries and fonts (cairo, Arial- and Georgia-compatible free fonts)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q libcairo2-dev pkg-config fonts-liberation
+          mkdir -p ~/.local/share/fonts
+          curl -sSfL -o ~/.local/share/fonts/Gelasio.ttf "https://github.com/google/fonts/raw/main/ofl/gelasio/Gelasio%5Bwght%5D.ttf"
+          fc-cache -f >/dev/null && fc-list | grep -i gelasio | head -1
+      - run: pip install -r requirements.txt
+      - name: Secrets (encrypted repository secrets)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GT_TOKEN_JSON: ${{ secrets.GT_TOKEN_JSON }}
+        run: |
+          printf '%s' "$HF_TOKEN" > hf_token.txt
+          printf '%s' "$GT_TOKEN_JSON" > token_music.json
+      - name: Make and upload today's song
+        env:
+          PYTHONIOENCODING: utf-8
+          CINEMATIC_SERIF: Gelasio
+        run: python gt_daily.py
+      - name: Save the release record in the repository
+        if: always()
+        run: |
+          rm -f hf_token.txt token_music.json
+          git config user.name "golden-tides-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gt_published.json
+          git diff --cached --quiet || (git commit -m "Release $(date -u +%F)" && git push)

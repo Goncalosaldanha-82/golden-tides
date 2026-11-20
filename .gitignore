@@ -1,0 +1,7 @@
+# secrets: never commit or share
+client_secret*.json
+token*.json
+hf_token.txt
+# generated
+output/
+__pycache__/
