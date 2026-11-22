@@ -30,7 +30,8 @@ jobs:
           now = datetime.datetime.now(ZoneInfo("Europe/Lisbon"))
           days = {d.get("publish_date") for d in json.load(open("gt_published.json")).values()}
           today = now.date().isoformat(); tomorrow = (now.date() + datetime.timedelta(days=1)).isoformat()
-          print("todo=" + ("false" if today in days and tomorrow in days else "true"))
+          todo = tomorrow not in days or (today not in days and now.hour < 12)
+          print("todo=" + ("true" if todo else "false"))
           PY
           cat "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5

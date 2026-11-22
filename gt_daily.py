@@ -151,10 +151,10 @@ def main():
     slot = now.astimezone(LISBON).replace(hour=HOUR, minute=0, second=0, microsecond=0)
     pub = json.loads(PUBLISHED.read_text(encoding="utf-8")) if PUBLISHED.exists() else {}
     days = {d.get("publish_date") for d in pub.values()}
-    if slot.date().isoformat() in days:
-        slot += datetime.timedelta(days=1)            # today is covered: prepare tomorrow's 06:00 release
-    # (if today has no release yet — e.g. a missed day — it is published right away to fill the gap;
-    #  the workflow runs every hour, so tomorrow's song is ready and scheduled long before 06:00)
+    if slot.date().isoformat() in days or now.astimezone(LISBON).hour >= 12:
+        slot += datetime.timedelta(days=1)            # prepare tomorrow's 06:00 release
+    # (a missed day is only filled in the morning; later in the day the song goes to the next 06:00, so
+    #  releases stay at 06:00 even though the free GPU quota renews on a rolling 24 h window)
     day = slot.date().isoformat()
     if day in days:
         print(f"nothing to do: a Golden Tides release is already set for {day}")
