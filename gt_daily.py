@@ -96,6 +96,16 @@ def audio_ok(path):
     return secs >= 60 and vol and float(vol[1]) > -30, secs
 
 
+class QuotaWait(Exception):
+    """The free Hugging Face GPU quota is not available yet: not an error, the next hourly run retries."""
+
+
+def quota_check(exc):
+    msg = str(exc)
+    if any(k in msg for k in ("ZeroGPU quota", "runs limit", "GPU duration")):
+        raise QuotaWait(msg[:160]) from exc
+
+
 def make_music(song, dst):
     c = Client("mrfakename/yue2-3b", token=hf(), verbose=False)
     for seed in (42, 7, 1234):
@@ -103,6 +113,7 @@ def make_music(song, dst):
             r = c.predict(style=song["style"], lyrics=song["lyrics"], planning_mode="full", render_quality=32,
                           seed=seed, api_name="/generate_song")
         except Exception as exc:
+            quota_check(exc)
             print(f"  music attempt (seed {seed}) failed: {str(exc)[:200]}")
             continue
         shutil.copy(r[0], dst)
@@ -115,8 +126,12 @@ def make_music(song, dst):
 
 def make_cover(prompt, dst, width=1344, height=768):
     c = Client("black-forest-labs/FLUX.1-schnell", token=hf(), verbose=False)
-    r = c.predict(prompt=cover_prompt(prompt), seed=7, randomize_seed=False, width=width, height=height,
-                  num_inference_steps=4, api_name="/infer")
+    try:
+        r = c.predict(prompt=cover_prompt(prompt), seed=7, randomize_seed=False, width=width, height=height,
+                      num_inference_steps=4, api_name="/infer")
+    except Exception as exc:
+        quota_check(exc)
+        raise
     subprocess.run([FF, "-y", "-loglevel", "error", "-i", r[0] if isinstance(r, (list, tuple)) else r, str(dst)],
                    check=True)
 
@@ -136,9 +151,10 @@ def main():
     slot = now.astimezone(LISBON).replace(hour=HOUR, minute=0, second=0, microsecond=0)
     pub = json.loads(PUBLISHED.read_text(encoding="utf-8")) if PUBLISHED.exists() else {}
     days = {d.get("publish_date") for d in pub.values()}
-    if now.astimezone(LISBON).hour >= HOUR - 1 and slot.date().isoformat() in days:
+    if slot.date().isoformat() in days:
         slot += datetime.timedelta(days=1)            # today is covered: prepare tomorrow's 06:00 release
-    # (if today has no release yet — e.g. a missed day — it is published right away to fill the gap)
+    # (if today has no release yet — e.g. a missed day — it is published right away to fill the gap;
+    #  the workflow runs every hour, so tomorrow's song is ready and scheduled long before 06:00)
     day = slot.date().isoformat()
     if day in days:
         print(f"nothing to do: a Golden Tides release is already set for {day}")
@@ -193,4 +209,7 @@ def main():
 if __name__ == "__main__":
     for _s in (sys.stdout, sys.stderr):
         _s.reconfigure(encoding="utf-8")
-    main()
+    try:
+        main()
+    except QuotaWait as w:
+        print(f"waiting for the free GPU quota, will retry next hour: {w}")
