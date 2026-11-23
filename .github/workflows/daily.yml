@@ -18,7 +18,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - name: Anything to do? (stops here in seconds when the next release is already prepared)
@@ -61,6 +61,7 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
           CINEMATIC_SERIF: Gelasio
+          GT_WAIT_FOR_QUOTA: "1"
         run: python gt_daily.py
       - name: Save the release record in the repository
         if: always() && steps.check.outputs.todo == 'true'

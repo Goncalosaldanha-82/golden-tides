@@ -181,7 +181,8 @@ def main():
     subprocess.run([sys.executable, str(ROOT / "cinematic.py"), "--audio", str(folder / "song.mp3"),
                     "--image", str(folder / "cover.png"), "--title", song["title"].upper(),
                     "--subtitle", song["genre"].upper(), "--out", str(folder),
-                    "--short-image", str(folder / "cover_short.png")], check=True)
+                    "--short-image", str(folder / "cover_short.png"), "--title-y", "0.88"], check=True)
+    # title low, over the sand: the covers show the woman full body, so the top is often her face
     digest = sha256(folder / "audio.wav")
     for d in pub.values():
         if d.get("audio_sha256") == digest:
@@ -212,7 +213,19 @@ def main():
 if __name__ == "__main__":
     for _s in (sys.stdout, sys.stderr):
         _s.reconfigure(encoding="utf-8")
-    try:
-        main()
-    except QuotaWait as w:
-        print(f"waiting for the free GPU quota, will retry next hour: {w}")
+    import os, time
+    for attempt in range(2):
+        try:
+            main()
+            break
+        except QuotaWait as w:
+            m = re.search(r"Try again in (\d+):(\d+):(\d+)", str(w))
+            wait = int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) + 60 if m else None
+            # in the cloud, wait inside the run when the quota is back within ~5.5 h (GitHub's hourly
+            # schedule is not reliable); otherwise stop quietly and let a later run try again
+            if attempt == 0 and wait and wait <= 5.5 * 3600 and os.environ.get("GT_WAIT_FOR_QUOTA"):
+                print(f"free GPU quota back in {wait // 60} min: waiting inside this run")
+                time.sleep(wait)
+                continue
+            print(f"waiting for the free GPU quota, a later run will retry: {w}")
+            break
