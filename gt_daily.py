@@ -146,6 +146,7 @@ def upload(yt, path, meta, status):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--today", action="store_true", help="publish right now as today's release (manual catch-up)")
     a = ap.parse_args()
     now = datetime.datetime.now(datetime.timezone.utc)
     slot = now.astimezone(LISBON).replace(hour=HOUR, minute=0, second=0, microsecond=0)
@@ -155,6 +156,8 @@ def main():
         slot += datetime.timedelta(days=1)            # prepare tomorrow's 06:00 release
     # (a missed day is only filled in the morning; later in the day the song goes to the next 06:00, so
     #  releases stay at 06:00 even though the free GPU quota renews on a rolling 24 h window)
+    if a.today:                                       # manual catch-up: publish now as today's release
+        slot = now.astimezone(LISBON)
     day = slot.date().isoformat()
     if day in days:
         print(f"nothing to do: a Golden Tides release is already set for {day}")
