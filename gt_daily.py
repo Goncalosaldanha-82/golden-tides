@@ -3,9 +3,11 @@
 The song is made in the afternoon (when the free Hugging Face GPU quota is available) and uploaded
 scheduled for the NEXT 06:00 Lisbon, so YouTube publishes it at exactly 06:00.
 
-Steps: next song from songs_bank.json (original lyrics) -> music with YuE (open model, HF free GPU quota)
--> cover with FLUX.1-schnell -> cinematic video + Short (cinematic.py) -> upload both to Golden Tides,
-private with publishAt = next 06:00 Europe/Lisbon (published immediately if the run is late).
+Steps: next song from songs_bank.json (original lyrics + a storyboard of scenes) -> music with ACE-Step 1.5
+(open model, HF free GPU quota; YuE as backup) -> one FLUX.1-schnell image per scene -> videoclip cut to the
+music with animated lyrics (clip.py) + Short + thumbnail -> upload to Golden Tides, private with
+publishAt = next 06:00 Europe/Lisbon. Work in progress is kept in pending/<song>/ (committed by the workflow),
+so when the free quota runs out halfway the next run carries on from there.
 
 State lives in the repository (committed by the workflow): gt_published.json.
 Guards: one release per Lisbon day; a song title is never used twice; same audio hash never re-uploaded.
@@ -37,7 +39,17 @@ LISBON = ZoneInfo("Europe/Lisbon")
 HOUR = 6
 FF = imageio_ffmpeg.get_ffmpeg_exe()
 MUSIC_CREDIT = "Music generated with YuE (open-source AI model) on Hugging Face."
-COVER_CREDIT = "Cover image generated with FLUX.1-schnell (Apache-2.0)."
+ACE_CREDIT = "Music generated with ACE-Step 1.5 (open-source AI model, Apache-2.0) on Hugging Face."
+COVER_CREDIT = "Images generated with FLUX.1-schnell (Apache-2.0)."
+PENDING = ROOT / "pending"
+ACE_SPACES = ["Kansasfan/Ace-Step-v1.5", "ACE-Step/Ace-Step-v1.5"]
+SCENE_STYLE = ("Cinematic music video still, {scene}. {character}. Natural candid photography, realistic skin and "
+               "natural proportions, dramatic cinematic lighting, shallow depth of field, rich colour grade, "
+               "anamorphic film look, sharp focus, no text, no watermark")
+SHOT_VARIANTS = ["wide establishing shot, {cover}", "full-body shot dancing, {cover}",
+                 "full-body shot from behind looking at the horizon, {cover}",
+                 "atmospheric detail shot of the place, no people, {cover}",
+                 "full-body shot at night under dramatic light, {cover}", "golden hour wide shot, {cover}"]
 FALLBACK_STYLE = {
     "Afro House": "Emotional Afro House, 122 BPM, tribal percussion, kalimba, deep bass, soulful female vocal",
     "Afro Latin": "Afro-Latin pop, 104 BPM, afrobeats and reggaeton groove, nylon guitar, warm bass, sensual female vocal",
@@ -124,6 +136,68 @@ def make_music(song, dst):
     raise SystemExit("music generation failed 3 times (HF quota or Space down) — nothing published, retry next run")
 
 
+def ace_music(song, folder):
+    """ACE-Step 1.5 (much better than YuE). Saves song.mp3 and, when the Space returns it, song.lrc."""
+    for space in ACE_SPACES:
+        try:
+            c = Client(space, token=hf(), verbose=False)
+            ep = c.view_api(return_format="dict", print_info=False)["named_endpoints"]["/generation_wrapper"]
+            kw = {p["parameter_name"]: p.get("parameter_default") for p in ep["parameters"]}
+            kw.update(selected_model="acestep-v15-turbo", generation_mode="custom", simple_query_input="",
+                      simple_vocal_language=song.get("lang", "en"), param_4=song["style"], param_5=song["lyrics"],
+                      param_6=float(song.get("bpm", 0)), param_9=song.get("lang", "en"), param_14=None,
+                      param_15=float(song.get("seconds", 150)), param_16=1, param_17=None, param_18="",
+                      param_19=0.0, param_20=-1.0, param_44=True, param_46=1.0, param_47="vocals", param_48=[])
+            r = c.predict(**kw, api_name="/generation_wrapper")
+        except Exception as exc:
+            quota_check(exc)
+            print(f"  ACE-Step on {space} failed: {str(exc)[:200]}")
+            continue
+        src = r[0]
+        while isinstance(src, dict):
+            src = src.get("value") or src.get("path") or src.get("name")
+        if not src:
+            print(f"  ACE-Step on {space}: no audio ({str(r[10])[:160] if len(r) > 10 else ''})")
+            continue
+        shutil.copy(src, folder / "song.mp3")
+        ok, secs = audio_ok(folder / "song.mp3")
+        print(f"  ACE-Step ({space}): {secs:.0f}s {'OK' if ok else 'rejected'}")
+        if not ok:
+            continue
+        for x in r[1:]:                                 # lyrics timing (LRC) when the Space provides it
+            while isinstance(x, dict):
+                x = x.get("value") or x.get("path")
+            if not isinstance(x, str):
+                continue
+            txt = x
+            if len(x) < 400 and x.endswith(".lrc") and Path(x).exists():
+                txt = Path(x).read_text(encoding="utf-8")
+            if re.search(r"\[\d+:\d+(\.\d+)?\]", txt):
+                (folder / "song.lrc").write_text(txt, encoding="utf-8")
+                print("  lyrics timing (LRC) saved")
+                break
+        return ACE_CREDIT
+    return None
+
+
+def make_image(prompt, dst, width=1344, height=768, seed=7):
+    c = Client("black-forest-labs/FLUX.1-schnell", token=hf(), verbose=False)
+    try:
+        r = c.predict(prompt=prompt, seed=seed, randomize_seed=False, width=width, height=height,
+                      num_inference_steps=4, api_name="/infer")
+    except Exception as exc:
+        quota_check(exc)
+        raise
+    subprocess.run([FF, "-y", "-loglevel", "error", "-i", r[0] if isinstance(r, (list, tuple)) else r, str(dst)],
+                   check=True)
+
+
+def scene_prompts(song):
+    scenes = song.get("scenes") or [v.format(cover=song["cover"]) for v in SHOT_VARIANTS]
+    character = song.get("character", "")
+    return [SCENE_STYLE.format(scene=sc, character=character if "no people" not in sc else "") for sc in scenes]
+
+
 def make_cover(prompt, dst, width=1344, height=768):
     c = Client("black-forest-labs/FLUX.1-schnell", token=hf(), verbose=False)
     try:
@@ -170,19 +244,44 @@ def main():
     if a.dry_run:
         return
 
-    folder = ROOT / "output" / f"gt_{day}_{slugify(song['title'])}"
+    folder = PENDING / slugify(song["title"])          # committed between runs: resumes after a quota stop
     folder.mkdir(parents=True, exist_ok=True)
-    if song.get("audio"):                              # song already made (e.g. by hand), stored in the repo
-        shutil.copy(ROOT / song["audio"], folder / "song.mp3")
-    else:
-        make_music(song, folder / "song.mp3")
-    make_cover(song["cover"], folder / "cover.png")
-    make_cover(song["cover"], folder / "cover_short.png", width=768, height=1344)
-    subprocess.run([sys.executable, str(ROOT / "cinematic.py"), "--audio", str(folder / "song.mp3"),
-                    "--image", str(folder / "cover.png"), "--title", song["title"].upper(),
-                    "--subtitle", song["genre"].upper(), "--out", str(folder),
-                    "--short-image", str(folder / "cover_short.png"), "--title-y", "0.88"], check=True)
-    # title low, over the sand: the covers show the woman full body, so the top is often her face
+    credit_file = folder / "music_credit.txt"
+    if not (folder / "song.mp3").exists():
+        if song.get("audio"):                          # song already made (e.g. by hand), stored in the repo
+            shutil.copy(ROOT / song["audio"], folder / "song.mp3")
+            credit_file.write_text(song.get("music_credit") or MUSIC_CREDIT, encoding="utf-8")
+        else:
+            credit = ace_music(song, folder)
+            if not credit:
+                make_music(song, folder / "song.mp3")
+                credit = MUSIC_CREDIT
+            credit_file.write_text(credit, encoding="utf-8")
+    prompts = scene_prompts(song)
+    for n, pr in enumerate(prompts, 1):                 # the story, one image per scene
+        if not (folder / f"scene_{n:02d}.png").exists():
+            make_image(pr, folder / f"scene_{n:02d}.png", seed=10 + n)
+            print(f"  scene {n}/{len(prompts)} ready")
+    plan = subprocess.run([sys.executable, str(ROOT / "clip.py"), "--audio", str(folder / "song.mp3"),
+                           "--scenes", str(folder), "--title", song["title"], "--out", str(ROOT / "output" / "plan"),
+                           "--plan"], capture_output=True, text=True, check=True).stdout
+    print(" ", plan.strip())
+    used = [int(x) for x in re.findall(r"\d+", plan.split("uses scenes")[-1])]
+    for n in used:                                      # vertical versions only for the Short's scenes
+        if not (folder / f"v_{n:02d}.png").exists():
+            make_image(prompts[n - 1], folder / f"v_{n:02d}.png", width=768, height=1344, seed=10 + n)
+    for n in range(1, len(prompts) + 1):
+        if not (folder / f"v_{n:02d}.png").exists():
+            shutil.copy(folder / f"scene_{n:02d}.png", folder / f"v_{n:02d}.png")
+    out = ROOT / "output" / f"gt_{day}_{slugify(song['title'])}"
+    cmd = [sys.executable, str(ROOT / "clip.py"), "--audio", str(folder / "song.mp3"), "--scenes", str(folder),
+           "--title", song["title"], "--subtitle", song["genre"], "--out", str(out),
+           "--hook", song.get("hook") or song["title"]]
+    if (folder / "song.lrc").exists():
+        cmd += ["--lrc", str(folder / "song.lrc")]
+    subprocess.run(cmd, check=True)
+    music_credit = credit_file.read_text(encoding="utf-8")
+    pending_dir, folder = folder, out
     digest = sha256(folder / "audio.wav")
     for d in pub.values():
         if d.get("audio_sha256") == digest:
@@ -193,7 +292,7 @@ def main():
         status.update(privacyStatus="private",
                       publishAt=slot.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
     extra = {k: song[k] for k in ("blurb", "hashtags") if song.get(k)}
-    music = song.get("music_credit") or MUSIC_CREDIT
+    music = music_credit
     rec = {"title": song["title"], "genre": song["genre"], "publish_date": day,
            "publishAt": status.get("publishAt") or "immediately", "audio_sha256": digest,
            "uploaded": now.isoformat()}
@@ -206,6 +305,11 @@ def main():
                  status)
     rec.update(short_id=sid, short_url=f"https://youtube.com/shorts/{sid}")
     PUBLISHED.write_text(json.dumps(pub, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:                                                # custom thumbnail (needs a verified channel)
+        yt.thumbnails().set(videoId=vid, media_body=MediaFileUpload(str(folder / "thumbnail.jpg"))).execute()
+    except Exception as exc:
+        print(f"  thumbnail not set: {str(exc)[:120]}")
+    shutil.rmtree(pending_dir, ignore_errors=True)
     print(f"uploaded: {rec['url']} | short: {rec['short_url']} -> public at "
           f"{status.get('publishAt') and slot.strftime('%Y-%m-%d %H:%M Lisbon') or 'now'}")
 

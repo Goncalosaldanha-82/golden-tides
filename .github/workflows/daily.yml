@@ -45,6 +45,7 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -y -q libcairo2-dev pkg-config fonts-liberation
           mkdir -p ~/.local/share/fonts
           curl -sSfL -o ~/.local/share/fonts/Gelasio.ttf "https://github.com/google/fonts/raw/main/ofl/gelasio/Gelasio%5Bwght%5D.ttf"
+          curl -sSfL -o ~/.local/share/fonts/Anton-Regular.ttf "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf"
           fc-cache -f >/dev/null && fc-list | grep -i gelasio | head -1
       - run: pip install -r requirements.txt
         if: steps.check.outputs.todo == 'true'
@@ -61,13 +62,16 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
           CINEMATIC_SERIF: Gelasio
+          CLIP_DISPLAY_FONT: Anton
+          CLIP_TEXT_FONT: Liberation Sans
           GT_WAIT_FOR_QUOTA: "1"
         run: python gt_daily.py
       - name: Save the release record in the repository
         if: always() && steps.check.outputs.todo == 'true'
         run: |
           rm -f hf_token.txt token_music.json
+          mkdir -p pending && touch pending/.keep
           git config user.name "golden-tides-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add gt_published.json
+          git add -A gt_published.json pending
           git diff --cached --quiet || (git commit -m "Release $(date -u +%F)" && git push)
