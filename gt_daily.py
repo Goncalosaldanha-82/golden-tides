@@ -240,6 +240,8 @@ def main():
     if me["id"] != config()["channel_id"]:
         raise SystemExit(f"STOP: token is for {me['snippet']['title']}, not Golden Tides — nothing uploaded")
     song = next_song(pub)
+    if song.get("publish_when_ready"):                 # one-off request: publish as soon as it is made
+        slot, day = now.astimezone(LISBON), now.astimezone(LISBON).date().isoformat()
     print(f"today's song: {song['title']} ({song['genre']}) -> public {day} {HOUR:02d}:00 Lisbon")
     if a.dry_run:
         return

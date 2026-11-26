@@ -61,7 +61,8 @@
         "[Outro]",
         "Ashes into gold",
         "(whispered) Let it burn"
-      ]
+      ],
+      "publish_when_ready": true
     },
     {
       "title": "Mama Ocean",
