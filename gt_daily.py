@@ -136,47 +136,76 @@ def make_music(song, dst):
     raise SystemExit("music generation failed 3 times (HF quota or Space down) — nothing published, retry next run")
 
 
+AUDIO_EXT = (".mp3", ".flac", ".wav", ".ogg", ".m4a")
+
+
+def find_files(x, exts):
+    """Every local file path or URL with one of exts inside a Gradio result (dicts, lists, update objects)."""
+    found = []
+    if isinstance(x, str):
+        if x.lower().split("?")[0].endswith(exts):
+            found.append(x)
+    elif isinstance(x, dict):
+        for k in ("path", "value", "name", "url", "orig_name"):
+            if k in x:
+                found += find_files(x[k], exts)
+    elif isinstance(x, (list, tuple)):
+        for y in x:
+            found += find_files(y, exts)
+    return found
+
+
+def fetch(src, dst):
+    if str(src).startswith("http"):
+        import urllib.request
+        with urllib.request.urlopen(src, timeout=120) as r, open(dst, "wb") as f:
+            f.write(r.read())
+    else:
+        shutil.copy(src, dst)
+
+
 def ace_music(song, folder):
-    """ACE-Step 1.5 (much better than YuE). Saves song.mp3 and, when the Space returns it, song.lrc."""
+    """ACE-Step 1.5 XL (the best free open model). Saves song.mp3 and the lyrics timing (song.lrc) when given.
+    The Space returns the audio as 'Sample 1' and/or in the 'All Generated Files' list; the lyrics timestamps
+    come in 'Lyrics Timestamps (Sample 1)' (output 28)."""
     for space in ACE_SPACES:
-        try:
-            c = Client(space, token=hf(), verbose=False)
-            ep = c.view_api(return_format="dict", print_info=False)["named_endpoints"]["/generation_wrapper"]
-            kw = {p["parameter_name"]: p.get("parameter_default") for p in ep["parameters"]}
-            kw.update(selected_model="acestep-v15-turbo", generation_mode="custom", simple_query_input="",
-                      simple_vocal_language=song.get("lang", "en"), param_4=song["style"], param_5=song["lyrics"],
-                      param_6=float(song.get("bpm", 0)), param_9=song.get("lang", "en"), param_14=None,
-                      param_15=float(song.get("seconds", 150)), param_16=1, param_17=None, param_18="",
-                      param_19=0.0, param_20=-1.0, param_44=True, param_46=1.0, param_47="vocals", param_48=[])
-            r = c.predict(**kw, api_name="/generation_wrapper")
-        except Exception as exc:
-            quota_check(exc)
-            print(f"  ACE-Step on {space} failed: {str(exc)[:200]}")
-            continue
-        src = r[0]
-        while isinstance(src, dict):
-            src = src.get("value") or src.get("path") or src.get("name")
-        if not src:
-            print(f"  ACE-Step on {space}: no audio ({str(r[10])[:160] if len(r) > 10 else ''})")
-            continue
-        shutil.copy(src, folder / "song.mp3")
-        ok, secs = audio_ok(folder / "song.mp3")
-        print(f"  ACE-Step ({space}): {secs:.0f}s {'OK' if ok else 'rejected'}")
-        if not ok:
-            continue
-        for x in r[1:]:                                 # lyrics timing (LRC) when the Space provides it
-            while isinstance(x, dict):
-                x = x.get("value") or x.get("path")
-            if not isinstance(x, str):
-                continue
-            txt = x
-            if len(x) < 400 and x.endswith(".lrc") and Path(x).exists():
-                txt = Path(x).read_text(encoding="utf-8")
-            if re.search(r"\[\d+:\d+(\.\d+)?\]", txt):
-                (folder / "song.lrc").write_text(txt, encoding="utf-8")
-                print("  lyrics timing (LRC) saved")
+        for model in ("acestep-v15-xl-turbo", "acestep-v15-turbo"):
+            try:
+                c = Client(space, token=hf(), verbose=False)
+                ep = c.view_api(return_format="dict", print_info=False)["named_endpoints"]["/generation_wrapper"]
+                kw = {p["parameter_name"]: p.get("parameter_default") for p in ep["parameters"]}
+                kw.update(selected_model=model, generation_mode="custom", simple_query_input="",
+                          simple_vocal_language=song.get("lang", "en"), param_4=song["style"],
+                          param_5=song["lyrics"], param_6=float(song.get("bpm", 0)), param_9=song.get("lang", "en"),
+                          param_14=None, param_15=float(song.get("seconds", 150)), param_16=1, param_17=None,
+                          param_18="", param_19=0.0, param_20=-1.0, param_44=True, param_46=1.0,
+                          param_47="vocals", param_48=[])
+                r = c.predict(**kw, api_name="/generation_wrapper")
+            except Exception as exc:
+                quota_check(exc)
+                print(f"  ACE-Step {model} on {space} failed: {str(exc)[:200]}")
+                if "duration" in str(exc).lower():
+                    continue                            # too long for the free tier: try the smaller model
                 break
-        return ACE_CREDIT
+            (folder / "ace_result.txt").write_text(repr(r)[:20000], encoding="utf-8")   # for diagnosis
+            audio = find_files(list(r[:9]), AUDIO_EXT)
+            if not audio:
+                print(f"  ACE-Step {model} on {space}: no audio file in the answer ({str(r[10])[:160]})")
+                break
+            fetch(audio[0], folder / "song.mp3")
+            ok, secs = audio_ok(folder / "song.mp3")
+            print(f"  ACE-Step {model} ({space}): {secs:.0f}s {'OK' if ok else 'rejected'}")
+            if not ok:
+                break
+            for x in r[28:29] + r[9:12]:                # lyrics timestamps (LRC-style) if present
+                txt = x if isinstance(x, str) else ""
+                if len(txt) < 400 and txt.endswith(".lrc") and Path(txt).exists():
+                    txt = Path(txt).read_text(encoding="utf-8")
+                if re.search(r"\[\d+:\d+(\.\d+)?\]|\d+(\.\d+)?\s*[-–>]+\s*\d+(\.\d+)?|\"start\"", txt):
+                    (folder / "song.lrc").write_text(txt, encoding="utf-8")
+                    print("  lyrics timing saved")
+                    break
+            return ACE_CREDIT.replace("ACE-Step 1.5", "ACE-Step 1.5 XL" if "xl" in model else "ACE-Step 1.5")
     return None
 
 
@@ -255,9 +284,8 @@ def main():
             credit_file.write_text(song.get("music_credit") or MUSIC_CREDIT, encoding="utf-8")
         else:
             credit = ace_music(song, folder)
-            if not credit:
-                make_music(song, folder / "song.mp3")
-                credit = MUSIC_CREDIT
+            if not credit:                              # quality first: no weak fallback, retry later
+                raise SystemExit("ACE-Step did not deliver a song this time; nothing published, next run retries")
             credit_file.write_text(credit, encoding="utf-8")
     prompts = scene_prompts(song)
     for n, pr in enumerate(prompts, 1):                 # the story, one image per scene

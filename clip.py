@@ -92,17 +92,29 @@ def strongest_window(a, seconds=30):
 
 # ----------------------------------------------------------------------------- lyrics
 def read_lrc(path, dur):
-    lines = []
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
-        for m in re.finditer(r"\[(\d+):(\d+(?:\.\d+)?)\]", raw):
-            text = re.sub(r"\[[^\]]*\]", "", raw).strip()
-            if text and not text.startswith("("):
-                lines.append((int(m[1]) * 60 + float(m[2]), text))
-    lines.sort()
+    """Lyrics timing in any of: LRC '[mm:ss.xx]text', 'start - end: text' (seconds) or JSON [{start,end,text}]."""
+    raw = Path(path).read_text(encoding="utf-8")
+    items = []
+    try:
+        import json
+        data = json.loads(raw)
+        data = data.get("lines") or data.get("segments") or data if isinstance(data, dict) else data
+        for d in data:
+            items.append((float(d.get("start", d.get("time", 0))), d.get("end"), str(d.get("text", "")).strip()))
+    except Exception:
+        for line in raw.splitlines():
+            m = re.match(r"\s*\[?(\d+(?:\.\d+)?)\s*s?\s*[-–>]+\s*(\d+(?:\.\d+)?)\s*s?\]?\s*[:|]?\s*(.+)", line)
+            if m and ":" not in m[1]:
+                items.append((float(m[1]), float(m[2]), m[3].strip()))
+                continue
+            for t in re.finditer(r"\[(\d+):(\d+(?:\.\d+)?)\]", line):
+                items.append((int(t[1]) * 60 + float(t[2]), None, re.sub(r"\[[^\]]*\]", "", line).strip()))
+    items = sorted((t, e, x) for t, e, x in items if x and not x.startswith("(") and not x.startswith("["))
     out = []
-    for i, (t, text) in enumerate(lines):
-        end = lines[i + 1][0] if i + 1 < len(lines) else min(dur, t + 5)
-        out.append((t, min(end, t + 7), text))
+    for i, (t, e, text) in enumerate(items):
+        nxt = items[i + 1][0] if i + 1 < len(items) else min(dur, t + 5)
+        end = min(e if e else nxt, nxt, t + 7)
+        out.append((t, max(end, t + 0.8), text))
     return out
 
 
